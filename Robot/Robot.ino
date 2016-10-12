@@ -64,7 +64,7 @@
 #define IR_Left A9
 #define IR_Right A6
 SharpIR sharp_l(IR_Left, 25, 93, 1080);
-SharpIR sharp_r(IR_Right, 100, 99, 1080);
+SharpIR sharp_r(IR_Right, 25, 93, 1080);
 int Sensor[4];
 
 //Sonar variables
@@ -76,6 +76,11 @@ int last_proximity = 0;
 const int base_speed_lt = 120;
 const int base_speed_rt = 110;
 const int set_point = 15;
+
+double P_adjust = 0;
+double I_adjust = 0;
+double D_adjust = 0;
+int PIorD = 0;
 
 
 //Sensor 0 = front
@@ -186,7 +191,8 @@ void pinInit() {
 	analogWrite(PWM_lt, 0);
 	digitalWrite(EN_lt, 0);
 	digitalWrite(EN_rt, 1);
-
+	pinMode(A11, OUTPUT);
+	pinMode(A10, INPUT);
 
 }
 
@@ -240,24 +246,43 @@ void ReadButtons() {
 	if (x < 60) {
 		button = 1;
 		LCD.print("Right ");
-		StateIncrementer++;
+		if (STATE == MAZE && PIorD != 0) {
+			if (STATE == MAZE && PIorD == 1) P_adjust = P_adjust + .1;
+			if (STATE == MAZE && PIorD == 2) I_adjust = I_adjust + .1;
+			if (STATE == MAZE && PIorD == 3) D_adjust = D_adjust + .1;
+		}
+		else 		StateIncrementer++;
 	}
 	else if (x < 200) {
 		button = 2;
-		TurnRight90();
+		if (STATE == MAZE) {
+			PIorD++;
+			if (PIorD > 3) PIorD = 0;
+		}
 	//	STATE = DRIVE;
 	}
 	else if (x < 400) {
 		button = 3;
-		TurnLeft90();
+		if (STATE == MAZE) {
+			PIorD--;
+			if (PIorD < 0) PIorD = 3;
+		}
 	//	LCD.print("Line");
 	//	STATE = LINE;
 	}
 	else if (x < 600) {
 		button = 4;
 	//	LCD.print("Left  ");
+		if (STATE == MAZE && PIorD != 0) {
+			if (STATE == MAZE && PIorD == 1) P_adjust = P_adjust - .1;
+			if (STATE == MAZE && PIorD == 2) I_adjust = I_adjust - .1;
+			if (STATE == MAZE && PIorD == 3) D_adjust = D_adjust - .1;
+		}
+		else 		{
 		if (StateIncrementer != 0) StateIncrementer--;
 		else StateIncrementer = 5;
+		}
+
 	}
 	else if (x < 800) {
 		button = 5;
@@ -463,7 +488,12 @@ void BackUp() {
 void UpdateSensors() {
 	Sensor[0] = sonar[2].ping_cm();
 	delay(33);
-	Sensor[3] = sharp_r.distance();
+
+	//No idea why sharp_r.distance() was having issues, just using raw voltage 
+	//to calculate cm now
+	int raw = analogRead(IR_Right);
+	float voltFromRaw = map(raw, 0, 1023, 0, 5000);
+	Sensor[3] = 27.728*pow(voltFromRaw / 1000, -1.2045);
 	//Sensor[3] = sharp_r.distance();
 	Sensor[4] = sonar[1].ping_cm();
 	delay(33);
@@ -481,15 +511,15 @@ void UpdateSensors() {
 }
 
 void MazePID() {
+	UpdateSensors();
+	int front_proximity = Sensor[2];
+	int proximity = Sensor[1];
 
-	int front_proximity = sonar[0].ping_cm();
-	int proximity = sharp_l.distance();
-
-	delay(75);
-	if (front_proximity < 40 && front_proximity != 0) {
+	
+	if (front_proximity < 30 && front_proximity != 0) {
 		BackUp();
 		delay(500);
-		if (proximity > 50) TurnLeft90();
+		if (Sensor[0] > 50) TurnLeft90();
 		else	TurnRight90();
 		delay(500);
 	}
@@ -499,9 +529,9 @@ void MazePID() {
 
 
 
-	int P = error * Kp_line;
-	I = (I + error) * Ki_line;
-	int D = (error - lastError) * Kd_line;
+	int P = error * (Kp_line + P_adjust);
+	I = (I + error) * (Ki_line + I_adjust);
+	int D = (error - lastError) * (Kd_line + D_adjust );
 	int motorSpeed = P + I + D;
 	lastError = error;
 
@@ -753,6 +783,9 @@ void LCDLoop() {
 		}
 
 	}
+	else if (STATE == MAZE) {
+		LCD.print(""); LCD.print(P_adjust); LCD.print(" "); LCD.print(I_adjust); LCD.print(" "); LCD.print(D_adjust);
+	}
 	else {
 		LCD.print(" L: ");	LCD.print(RPM_lt);
 		LCD.print(" R: ");    LCD.print(RPM_rt); LCD.print("     ");
@@ -904,7 +937,6 @@ void loop() {
 	}
 	}
 	else if (LineFollow) LinePID();
-	UpdateSensors();
 //	if (Maze) oneSensorCycle(); // PingSensors();
 
 }
